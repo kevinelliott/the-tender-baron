@@ -26,6 +26,7 @@ export type CoverView = {
   readonly sideStatus: SideStatus;
   readonly statusLabel: string;
   readonly cellId?: string;
+  readonly riskLocation?: "GRILL" | "REST";
   readonly path: readonly string[];
 };
 

@@ -46,6 +46,7 @@ export function projectService(
       sideStatus: side.status,
       statusLabel: titleCase(cut.status),
       ...(cut.cellId === undefined ? {} : { cellId: cut.cellId }),
+      ...(cut.riskLocation === undefined ? {} : { riskLocation: cut.riskLocation }),
       path: path.length > 1 ? path : ["Case", "Temper", "Heat", "Rest", "Carve"],
     };
   });
@@ -68,7 +69,9 @@ export function projectService(
     });
 
   const resting = covers.filter((cover) =>
-    ["RESTING", "READY_TO_CARVE", "AT_RISK"].includes(cover.cutStatus),
+    cover.cutStatus === "RESTING"
+      || cover.cutStatus === "READY_TO_CARVE"
+      || (cover.cutStatus === "AT_RISK" && cover.riskLocation === "REST"),
   );
   const restSlots = [0, 1].map((index) => {
     const cover = resting[index];
@@ -120,6 +123,6 @@ export function projectService(
     },
     restSlots,
     ledgerPreview,
-    cutsOnGrill: state.cuts.filter((cut) => cut.status === "ON_GRILL" || (cut.status === "AT_RISK" && cut.cellId !== undefined)).length,
+    cutsOnGrill: state.cuts.filter((cut) => cut.status === "ON_GRILL" || (cut.status === "AT_RISK" && cut.riskLocation === "GRILL")).length,
   };
 }
