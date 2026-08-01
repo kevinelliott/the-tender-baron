@@ -15,7 +15,10 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["packages/game-testing/tests/**/*.test.ts"],
+    include: [
+      "packages/game-testing/tests/**/*.test.ts",
+      "apps/web/tests/**/*.test.ts",
+    ],
     pool: "forks",
     coverage: {
       provider: "v8",

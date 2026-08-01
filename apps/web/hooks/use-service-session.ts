@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   SerialClockAdapter,
+  MAX_IMPORT_BYTES,
   createInitialState,
   createSaveEnvelope,
   exportSave,
@@ -326,7 +327,7 @@ export function useServiceSession() {
 
     async function hydrate() {
       try {
-        const current = await storageRef.current.read(SERVICE_SAVE_ID);
+        const current = await storageRef.current.readSnapshot(SERVICE_SAVE_ID);
         if (cancelled) return;
         if (current === undefined) {
           const initial = freshInitialState();
@@ -343,17 +344,25 @@ export function useServiceSession() {
         }
 
         try {
-          const envelope = importSave(current, SERVICE_SAVE_ID, RULES_V1, FIRST_SERVICE_CONTENT);
+          const envelope = importSave(current.payload, SERVICE_SAVE_ID, RULES_V1, FIRST_SERVICE_CONTENT);
           loadEnvelope(envelope, "SAVED", `Verified local service resumed at tick ${envelope.state.currentTick}.`);
           await refreshSaves();
           return;
         } catch (currentError) {
-          await storageRef.current.quarantine(SERVICE_SAVE_ID, current, errorMessage(currentError));
+          try {
+            await storageRef.current.quarantine(SERVICE_SAVE_ID, current.expectation, errorMessage(currentError));
+          } catch (recoveryError) {
+            if (recoveryError instanceof SaveConflictError) {
+              enterConflict(recoveryError);
+              return;
+            }
+            throw recoveryError;
+          }
           const backup = await storageRef.current.readBackup(SERVICE_SAVE_ID);
           if (backup !== undefined) {
             try {
               const envelope = importSave(backup, SERVICE_SAVE_ID, RULES_V1, FIRST_SERVICE_CONTENT);
-              persistedRef.current = await storageRef.current.restoreBackup(SERVICE_SAVE_ID, backup, envelope);
+              persistedRef.current = await storageRef.current.restoreBackup(SERVICE_SAVE_ID, backup, envelope, null);
               loadEnvelope(envelope, "RECOVERED", "Verified backup restored. Review the recovery note before continuing.");
               setRecovery({
                 title: "The latest save was set aside",
@@ -362,7 +371,11 @@ export function useServiceSession() {
               });
               await refreshSaves();
               return;
-            } catch {
+            } catch (backupError) {
+              if (backupError instanceof SaveConflictError) {
+                enterConflict(backupError);
+                return;
+              }
               // Continue to the explicit no-verified-save decision below.
             }
           }
@@ -430,7 +443,7 @@ export function useServiceSession() {
     return () => {
       cancelled = true;
     };
-  }, [loadEnvelope, refreshSaves, updateState]);
+  }, [enterConflict, loadEnvelope, refreshSaves, updateState]);
 
   const startFresh = useCallback(async (reason?: string) => {
     const initial = freshInitialState();
@@ -537,6 +550,9 @@ export function useServiceSession() {
       return;
     }
     try {
+      if (file.size > MAX_IMPORT_BYTES) {
+        throw new Error("The imported save exceeds the supported size bound.");
+      }
       const saveId = `first-embers-import-${Date.now().toString(36)}`;
       const envelope = importSave(await file.text(), saveId, RULES_V1, FIRST_SERVICE_CONTENT);
       persistedRef.current = await storageRef.current.write(envelope, null);

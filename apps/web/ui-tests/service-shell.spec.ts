@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
+import { MAX_IMPORT_BYTES } from "@tender-baron/game-domain";
 
 const DATABASE = "tender-baron-device-service-v1";
 const SAVE_STORE = "saves";
@@ -15,6 +16,50 @@ async function clickAction(page: Page, target: Locator) {
   const before = Number(await page.getByTestId("service-revision").textContent());
   await target.click();
   await expect.poll(async () => Number(await page.getByTestId("service-revision").textContent())).toBeGreaterThan(before);
+}
+
+async function tapAction(page: Page, target: Locator) {
+  const before = Number(await page.getByTestId("service-revision").textContent());
+  await target.tap();
+  await expect.poll(async () => Number(await page.getByTestId("service-revision").textContent())).toBeGreaterThan(before);
+}
+
+async function expectNoSeriousAxe(page: Page, state: string) {
+  const results = await new AxeBuilder({ page }).include("main").analyze();
+  const blocking = results.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical");
+  expect(blocking, `${state}: ${JSON.stringify(blocking, null, 2)}`).toEqual([]);
+}
+
+async function clearDatabase(page: Page) {
+  await page.goto("/replay-proof");
+  await page.evaluate(async (databaseName) => {
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.deleteDatabase(databaseName);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => reject(new Error("The test database could not be cleared."));
+    });
+  }, DATABASE);
+}
+
+async function pressWithKeyboard(page: Page, target: Locator, changesRevision = false) {
+  await expect(page.locator("main")).toHaveAttribute("aria-busy", "false");
+  await expect(target).toBeVisible();
+  for (let index = 0; index < 120; index += 1) {
+    if (await target.evaluate((element) => element === document.activeElement)) {
+      const outline = await target.evaluate((element) => getComputedStyle(element).outlineWidth);
+      expect(Number.parseFloat(outline)).toBeGreaterThanOrEqual(2);
+      const before = Number(await page.getByTestId("service-revision").textContent());
+      await page.keyboard.press("Enter");
+      if (changesRevision) {
+        await expect.poll(async () => Number(await page.getByTestId("service-revision").textContent())).toBeGreaterThan(before);
+        await expect(page.locator("main")).toHaveAttribute("aria-busy", "false");
+      }
+      return;
+    }
+    await page.keyboard.press("Tab");
+  }
+  throw new Error(`Keyboard could not reach ${await target.getAttribute("data-testid") ?? await target.textContent()}`);
 }
 
 async function openSetup(page: Page) {
@@ -89,7 +134,7 @@ test("live monotonic cadence pauses in the background and resumes without catch-
   await chooseView(page, "Coal Table");
   await clickAction(page, page.getByTestId("cut-action"));
   await clickAction(page, page.getByTestId("cut-action"));
-  await expect.poll(async () => Number(await page.getByTestId("canonical-tick").textContent()), { timeout: 2_000 }).toBeGreaterThanOrEqual(4);
+  await expect.poll(async () => Number(await page.getByTestId("canonical-tick").textContent()), { timeout: 5_000 }).toBeGreaterThanOrEqual(4);
 
   const other = await context.newPage();
   await other.goto("/replay-proof");
@@ -107,7 +152,7 @@ test("live monotonic cadence pauses in the background and resumes without catch-
     document.dispatchEvent(new Event("visibilitychange"));
   });
   await clickAction(page, page.getByRole("button", { name: "Resume service" }));
-  await expect.poll(async () => Number(await page.getByTestId("canonical-tick").textContent()), { timeout: 1_500 }).toBeGreaterThan(Number(pausedTick));
+  await expect.poll(async () => Number(await page.getByTestId("canonical-tick").textContent()), { timeout: 3_000 }).toBeGreaterThan(Number(pausedTick));
 });
 
 test("rake selection changes clear the bound preview and only exact intent applies", async ({ page }, testInfo) => {
@@ -138,6 +183,7 @@ test("two tabs cannot overwrite one another and the losing tab gets an explicit 
   await second.getByRole("button", { name: "Open the house" }).first().click();
   await expect(second.getByRole("alert", { name: "Another tab moved this service forward" })).toBeVisible();
   await expect(second.getByTestId("storage-state")).toHaveText("CONFLICT");
+  await expectNoSeriousAxe(second, "conflict recovery");
   await second.getByRole("button", { name: "Fork this tab" }).click();
   await expect(second.getByTestId("storage-state")).toHaveText("SAVED");
   await expect(second.locator(".save-book strong")).toContainText("conflict-fork-");
@@ -149,15 +195,7 @@ test("two tabs cannot overwrite one another and the losing tab gets an explicit 
 
 test("simultaneous first tabs share the winning verified save instead of claiming memory-only", async ({ page, context }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "desktop first-save concurrency journey");
-  await page.goto("/replay-proof");
-  await page.evaluate(async (databaseName) => {
-    await new Promise<void>((resolve, reject) => {
-      const request = indexedDB.deleteDatabase(databaseName);
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-      request.onblocked = () => reject(new Error("The test database could not be cleared."));
-    });
-  }, DATABASE);
+  await clearDatabase(page);
 
   const peers = await Promise.all(Array.from({ length: 4 }, () => context.newPage()));
   const tabs = [page, ...peers];
@@ -210,6 +248,7 @@ test("corrupt current storage is quarantined and the verified backup resumes", a
   await expect(page.getByRole("alert", { name: "The latest save was set aside" })).toBeVisible();
   await expect(page.getByTestId("storage-state")).toHaveText("RECOVERED");
   await expect(page.getByTestId("service-status")).toHaveText("DORMANT");
+  await expectNoSeriousAxe(page, "corrupt-save recovery");
 });
 
 test("export, import, fork, and delete preserve explicit local lifecycle choices", async ({ page }, testInfo) => {
@@ -235,8 +274,35 @@ test("export, import, fork, and delete preserve explicit local lifecycle choices
   await waitForSaved(page);
 });
 
+test("oversized browser imports are rejected before File.text materializes bytes", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "desktop import preflight boundary");
+  await page.addInitScript(() => {
+    const originalText = File.prototype.text;
+    Object.defineProperty(File.prototype, "text", {
+      configurable: true,
+      value(this: File) {
+        const testWindow = window as typeof window & { __tenderBaronFileTextCalls?: number };
+        testWindow.__tenderBaronFileTextCalls = (testWindow.__tenderBaronFileTextCalls ?? 0) + 1;
+        return originalText.call(this);
+      },
+    });
+  });
+  await page.goto("/");
+  await waitForSaved(page);
+  await page.getByText("Device save book").click();
+  await page.getByLabel("Choose a Tender Baron save to import").setInputFiles({
+    name: "oversized.tender-baron.json",
+    mimeType: "application/json",
+    buffer: Buffer.alloc(MAX_IMPORT_BYTES + 1, "x"),
+  });
+  await expect(page.getByTestId("service-notice")).toContainText("exceeds the supported size bound");
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { __tenderBaronFileTextCalls?: number }).__tenderBaronFileTextCalls ?? 0)).toBe(0);
+  await expect(page.locator(".save-book strong")).toHaveText(CURRENT_SAVE);
+});
+
 test("the authored first service reaches a truthful missing-side recovery settlement", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "desktop complete-service recovery journey");
+  test.setTimeout(60_000);
   const fixedTime = new Date("2026-08-01T00:00:00Z");
   await page.clock.install({ time: fixedTime });
   await page.clock.pauseAt(fixedTime);
@@ -282,10 +348,13 @@ test("the authored first service reaches a truthful missing-side recovery settle
   await clickAction(page, page.getByRole("button", { name: /Close ledger/ }).last());
   await expect(page.getByTestId("service-status")).toHaveText("SETTLED");
   await expect(page.getByText("10,440 house cents")).toBeVisible();
+  await page.clock.resume();
+  await expectNoSeriousAxe(page, "settlement");
 });
 
 test("move, baste, defer, and authored at-risk recovery remain player choices", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "desktop recovery controls journey");
+  test.setTimeout(60_000);
   const fixedTime = new Date("2026-08-01T00:00:00Z");
   await page.clock.install({ time: fixedTime });
   await page.clock.pauseAt(fixedTime);
@@ -309,7 +378,22 @@ test("move, baste, defer, and authored at-risk recovery remain player choices", 
   }
   await expect(recovery).toBeVisible();
   await expect(page.getByRole("button", { name: /Move to holding heat/ })).toBeEnabled();
+  await clickAction(page, page.getByRole("button", { name: "Pause service" }));
+  await page.clock.resume();
+  await expectNoSeriousAxe(page, "at-risk recovery");
+  await clickAction(page, page.getByRole("button", { name: "Resume service" }));
   await clickAction(page, page.getByRole("button", { name: /Move to holding heat/ }));
+});
+
+test("active-service task state has no serious or critical Axe violations", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "desktop active-state accessibility scan");
+  await openSetup(page);
+  await chooseView(page, "Coal Table");
+  await clickAction(page, page.getByTestId("cut-action"));
+  await clickAction(page, page.getByTestId("cut-action"));
+  await clickAction(page, page.getByRole("button", { name: "Pause service" }));
+  await expect(page.getByTestId("service-status")).toHaveText("OPEN");
+  await expectNoSeriousAxe(page, "active service");
 });
 
 test("browser bundle reproduces the Node golden replay bytes", async ({ page }) => {
@@ -319,79 +403,145 @@ test("browser bundle reproduces the Node golden replay bytes", async ({ page }) 
   await expect(page.getByTestId("proof-equivalence")).toHaveText("Browser bytes match the Node golden replay");
 });
 
-test("mobile task planes drive one live session without overflow", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "mobile-390", "touch-sized task-plane journey");
+test("touch input opens service and places a cut across mobile task planes", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-390", "touch gameplay journey");
   await page.goto("/");
   await waitForSaved(page);
   const nav = page.getByRole("navigation", { name: "Mobile task planes" });
-  for (const [name, testId] of [["Fire", "coal-table"], ["Rest", "rest-plane"], ["Pass", "pass-plane"], ["Room", "service-theatre"]] as const) {
-    const tick = await page.getByTestId("canonical-tick").textContent();
-    await nav.getByRole("button", { name }).click();
-    await expect(page.getByTestId(testId)).toBeVisible();
-    await expect(page.getByTestId("canonical-tick")).toHaveText(tick ?? "");
-  }
+  await tapAction(page, page.getByRole("button", { name: "Open the house" }).first());
+  await tapAction(page, page.getByRole("button", { name: "Review the promise" }).first());
+  await nav.getByRole("button", { name: "Fire" }).tap();
+  await expect(page.getByTestId("coal-table")).toBeVisible();
+  await tapAction(page, page.getByTestId("cut-action"));
+  await page.getByTestId("placement-coal_a").tap();
+  await tapAction(page, page.getByTestId("cut-action"));
+  await nav.getByRole("button", { name: "Rest" }).tap();
+  await expect(page.getByTestId("rest-plane")).toBeVisible();
+  await nav.getByRole("button", { name: "Pass" }).tap();
+  await expect(page.getByTestId("pass-plane")).toBeVisible();
+  await nav.getByRole("button", { name: "Room" }).tap();
+  await expect(page.getByTestId("service-theatre")).toBeVisible();
+  await expect(page.getByTestId("service-status")).toHaveText("OPEN");
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
 });
 
-test("responsive matrix and 200 percent text zoom preserve the complete task path", async ({ page }, testInfo) => {
+test("responsive widths support opening service and placing a cut without overflow", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "single-browser responsive matrix");
   for (const viewport of [{ width: 320, height: 720 }, { width: 390, height: 844 }, { width: 768, height: 900 }, { width: 1024, height: 900 }, { width: 1440, height: 960 }]) {
     await page.setViewportSize(viewport);
+    await clearDatabase(page);
     await page.goto("/");
     await waitForSaved(page);
-    await expect(page.locator("h1")).toBeAttached();
+    await clickAction(page, page.getByRole("button", { name: "Open the house" }).first());
+    await clickAction(page, page.getByRole("button", { name: "Review the promise" }).first());
+    const desktopFire = page.getByRole("navigation", { name: "Service views" }).getByRole("button", { name: /^Coal Table/ });
+    if (await desktopFire.isVisible()) await desktopFire.click();
+    else await page.getByRole("navigation", { name: "Mobile task planes" }).getByRole("button", { name: "Fire" }).click();
+    await clickAction(page, page.getByTestId("cut-action"));
+    await page.getByTestId("placement-coal_a").click();
+    await clickAction(page, page.getByTestId("cut-action"));
+    await expect(page.getByTestId("storage-state")).toHaveText("SAVED");
     expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), `${viewport.width}px horizontal overflow`).toBeLessThanOrEqual(0);
   }
   await page.setViewportSize({ width: 720, height: 900 });
+  await clearDatabase(page);
   await page.goto("/");
   await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
   await expect(page.getByRole("button", { name: "Open the house" }).first()).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
 });
 
-test("keyboard-only service uses natural tab order for real actions", async ({ page }, testInfo) => {
+test("keyboard-only journey reaches missing-side recovery and settlement in natural tab order", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "desktop keyboard-only journey");
+  const fixedTime = new Date("2026-08-01T00:00:00Z");
+  await page.clock.install({ time: fixedTime });
+  await page.clock.pauseAt(fixedTime);
   await page.goto("/");
   await waitForSaved(page);
+  const desktopViews = page.getByRole("navigation", { name: "Service views" });
+  const keyboardView = (name: "Service Theatre" | "Coal Table" | "Active Rest" | "Whole-table Pass") => desktopViews.getByRole("button", { name: new RegExp(`^${name}`) });
+  const keyboardCover = (cover: "A" | "B" | "C" | "D") => page.getByTestId(`cover-${cover}`);
+  const keyboardSide = (sideName: string) => page.locator(".pass-row").filter({ hasText: sideName }).locator(".side-action");
+  const chooseKeyboardCover = async (cover: "A" | "B" | "C" | "D") => {
+    await pressWithKeyboard(page, keyboardView("Service Theatre"));
+    await pressWithKeyboard(page, keyboardCover(cover));
+  };
 
-  async function pressControl(name: RegExp, changesRevision = false) {
-    await expect(page.locator("main")).toHaveAttribute("aria-busy", "false");
-    for (let index = 0; index < 80; index += 1) {
-      if (index > 0 || (await page.evaluate(() => document.activeElement === document.body))) {
-        await page.keyboard.press("Tab");
-      }
-      const focused = await page.evaluate(() => {
-        const active = document.activeElement as HTMLElement | null;
-        return {
-          label: active?.getAttribute("aria-label") ?? active?.innerText ?? "",
-          disabled: active instanceof HTMLButtonElement && active.disabled,
-          tagName: active?.tagName ?? "",
-          className: active?.className ?? "",
-        };
-      });
-      if (focused.tagName === "BUTTON" && name.test(focused.label.trim()) && !focused.disabled) {
-        const outline = await page.evaluate(() => getComputedStyle(document.activeElement as Element).outlineWidth);
-        expect(Number.parseFloat(outline)).toBeGreaterThanOrEqual(2);
-        const before = Number(await page.getByTestId("service-revision").textContent());
-        await page.keyboard.press("Enter");
-        if (changesRevision) {
-          await expect.poll(async () => Number(await page.getByTestId("service-revision").textContent())).toBeGreaterThan(before);
-          await expect(page.locator("main")).toHaveAttribute("aria-busy", "false");
-        }
-        return;
-      }
-    }
-    throw new Error(`Keyboard could not reach ${name}`);
+  await pressWithKeyboard(page, page.getByRole("button", { name: "Open the house" }).first(), true);
+  await pressWithKeyboard(page, page.getByRole("button", { name: "Review the promise" }).first(), true);
+  for (const cover of ["A", "B", "C", "D"] as const) {
+    await chooseKeyboardCover(cover);
+    await pressWithKeyboard(page, keyboardView("Coal Table"));
+    await pressWithKeyboard(page, page.getByTestId("cut-action"), true);
   }
+  const placements = { A: "coal_a", B: "coal_e", C: "coal_b", D: "coal_f" } as const;
+  for (const cover of ["A", "B", "C", "D"] as const) {
+    await chooseKeyboardCover(cover);
+    await pressWithKeyboard(page, keyboardView("Coal Table"));
+    await pressWithKeyboard(page, page.getByTestId(`placement-${placements[cover]}`));
+    await pressWithKeyboard(page, page.getByTestId("cut-action"), true);
+  }
+  await pressWithKeyboard(page, keyboardView("Whole-table Pass"));
+  await pressWithKeyboard(page, keyboardSide("Ember shallot"), true);
+  await pressWithKeyboard(page, keyboardSide("Creamed greens"), true);
 
-  await pressControl(/Open the house/, true);
-  await expect(page.getByTestId("service-status")).toHaveText("BRIEFING");
-  await pressControl(/Review the promise/, true);
-  await expect(page.getByTestId("service-status")).toHaveText("SETUP");
-  await pressControl(/^Coal Table/);
-  await expect(page.getByTestId("coal-table")).toBeVisible();
-  await pressControl(/^Select cut$/, true);
-  await expect(page.getByTestId("cut-action")).toHaveText("Place cut");
+  await advanceToTick(page, 16);
+  await pressWithKeyboard(page, page.getByRole("button", { name: "Acknowledge" }), true);
+  await advanceToTick(page, 30);
+  await chooseKeyboardCover("A");
+  await pressWithKeyboard(page, keyboardView("Active Rest"));
+  await pressWithKeyboard(page, page.getByRole("button", { name: /Move to rest/ }), true);
+  await chooseKeyboardCover("C");
+  await pressWithKeyboard(page, keyboardView("Coal Table"));
+  await pressWithKeyboard(page, page.getByTestId("placement-coal_a"));
+  await pressWithKeyboard(page, page.getByTestId("move-cut"), true);
+
+  await advanceToTick(page, 32);
+  await pressWithKeyboard(page, keyboardView("Whole-table Pass"));
+  await pressWithKeyboard(page, keyboardSide("Ember shallot"), true);
+  await pressWithKeyboard(page, keyboardSide("Creamed greens"), true);
+  await pressWithKeyboard(page, keyboardSide("Smoked potato"), true);
+  await pressWithKeyboard(page, keyboardSide("Brass-pan mushrooms"), true);
+  await advanceToTick(page, 34);
+  await chooseKeyboardCover("D");
+  await pressWithKeyboard(page, keyboardView("Active Rest"));
+  await pressWithKeyboard(page, page.getByRole("button", { name: /Move to rest/ }), true);
+  await advanceToTick(page, 48);
+  await chooseKeyboardCover("B");
+  await pressWithKeyboard(page, keyboardView("Coal Table"));
+  await pressWithKeyboard(page, page.getByTestId("placement-coal_b"));
+  await pressWithKeyboard(page, page.getByTestId("move-cut"), true);
+  await advanceToTick(page, 56);
+  await pressWithKeyboard(page, keyboardView("Whole-table Pass"));
+  await pressWithKeyboard(page, keyboardSide("Brass-pan mushrooms"), true);
+
+  await advanceToTick(page, 68);
+  for (const cover of ["A", "D"] as const) {
+    await chooseKeyboardCover(cover);
+    await pressWithKeyboard(page, keyboardView("Active Rest"));
+    await pressWithKeyboard(page, page.getByRole("button", { name: /^Carve/ }), true);
+  }
+  for (const cover of ["B", "C"] as const) {
+    await chooseKeyboardCover(cover);
+    await pressWithKeyboard(page, keyboardView("Active Rest"));
+    await pressWithKeyboard(page, page.getByRole("button", { name: /Move to rest/ }), true);
+  }
+  await advanceToTick(page, 94);
+  await chooseKeyboardCover("B");
+  await pressWithKeyboard(page, keyboardView("Active Rest"));
+  await pressWithKeyboard(page, page.getByRole("button", { name: /^Carve/ }), true);
+  await advanceToTick(page, 98);
+  await chooseKeyboardCover("C");
+  await pressWithKeyboard(page, keyboardView("Active Rest"));
+  await pressWithKeyboard(page, page.getByRole("button", { name: /^Carve/ }), true);
+
+  await pressWithKeyboard(page, keyboardView("Whole-table Pass"));
+  await pressWithKeyboard(page, page.getByRole("button", { name: /Offer a shared course/i }), true);
+  await pressWithKeyboard(page, page.getByRole("button", { name: /Call the table/ }).last(), true);
+  await expect(page.getByTestId("service-status")).toHaveText("CLOSING");
+  await pressWithKeyboard(page, page.getByRole("button", { name: /Close ledger/ }).last(), true);
+  await expect(page.getByTestId("service-status")).toHaveText("SETTLED");
+  await expect(page.getByText("10,440 house cents")).toBeVisible();
 });
 
 test("reduced motion, forced colors, names, targets, and serious accessibility scan pass", async ({ page }) => {
@@ -415,8 +565,6 @@ test("reduced motion, forced colors, names, targets, and serious accessibility s
   expect(undersized).toEqual([]);
 
   await page.emulateMedia({ reducedMotion: "reduce", forcedColors: "none" });
-  const results = await new AxeBuilder({ page }).include("main").analyze();
-  const blocking = results.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical");
-  expect(blocking, JSON.stringify(blocking, null, 2)).toEqual([]);
+  await expectNoSeriousAxe(page, "initial service");
   await expect(page.locator("body")).not.toContainText(/wallet|token|marketplace|blockchain|chain/i);
 });

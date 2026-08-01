@@ -25,12 +25,33 @@ type StoredSave = SaveSummary & {
   readonly payload: string;
 };
 
+export type SaveRecordExpectation = {
+  readonly payload: string;
+  readonly revision: number;
+  readonly stateDigest: string;
+  readonly savedAt: number;
+};
+
+export type SaveRecordSnapshot = {
+  readonly payload: string;
+  readonly expectation: SaveRecordExpectation;
+};
+
 function backupId(saveId: string): string {
   return `${saveId}${BACKUP_SUFFIX}`;
 }
 
 function expectationFor(record: StoredSave): Exclude<SaveExpectation, null> {
   return { revision: record.revision, stateDigest: record.stateDigest };
+}
+
+function recordExpectationFor(record: StoredSave): SaveRecordExpectation {
+  return {
+    payload: record.payload,
+    revision: record.revision,
+    stateDigest: record.stateDigest,
+    savedAt: record.savedAt,
+  };
 }
 
 function metadataFor(envelope: SaveEnvelope, payload: string): StoredSave {
@@ -48,6 +69,14 @@ function sameExpectation(record: StoredSave | undefined, expected: SaveExpectati
   return record !== undefined
     && record.revision === expected.revision
     && record.stateDigest === expected.stateDigest;
+}
+
+function sameRecordExpectation(record: StoredSave | undefined, expected: SaveRecordExpectation): boolean {
+  return record !== undefined
+    && record.payload === expected.payload
+    && record.revision === expected.revision
+    && record.stateDigest === expected.stateDigest
+    && record.savedAt === expected.savedAt;
 }
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
@@ -110,13 +139,21 @@ export class SaveConflictError extends Error {
 }
 
 export class IndexedDbSaveStore {
-  async read(saveId: string): Promise<string | undefined> {
+  async readSnapshot(saveId: string): Promise<SaveRecordSnapshot | undefined> {
     const database = await openDatabase();
     try {
-      return (await readRecord(database, saveId))?.payload;
+      const record = await readRecord(database, saveId);
+      return record === undefined ? undefined : {
+        payload: record.payload,
+        expectation: recordExpectationFor(record),
+      };
     } finally {
       database.close();
     }
+  }
+
+  async read(saveId: string): Promise<string | undefined> {
+    return (await this.readSnapshot(saveId))?.payload;
   }
 
   async readExpectation(saveId: string): Promise<SaveExpectation> {
@@ -177,34 +214,77 @@ export class IndexedDbSaveStore {
     }
   }
 
-  async restoreBackup(saveId: string, payload: string, envelope: SaveEnvelope): Promise<SaveExpectation> {
+  async restoreBackup(
+    saveId: string,
+    payload: string,
+    envelope: SaveEnvelope,
+    expected: SaveExpectation,
+  ): Promise<SaveExpectation> {
     const database = await openDatabase();
     try {
       const transaction = database.transaction(SAVE_STORE, "readwrite");
-      transaction.objectStore(SAVE_STORE).put({
-        ...metadataFor(envelope, payload),
-        id: saveId,
-      } satisfies StoredSave);
-      await transactionDone(transaction);
+      const store = transaction.objectStore(SAVE_STORE);
+      const existingRequest = store.get(saveId) as IDBRequest<StoredSave | undefined>;
+      await new Promise<void>((resolve, reject) => {
+        let rejected = false;
+        existingRequest.addEventListener("success", () => {
+          const existing = existingRequest.result;
+          if (!sameExpectation(existing, expected)) {
+            rejected = true;
+            transaction.abort();
+            reject(new SaveConflictError(saveId, existing));
+            return;
+          }
+          store.put({
+            ...metadataFor(envelope, payload),
+            id: saveId,
+          } satisfies StoredSave);
+        }, { once: true });
+        existingRequest.addEventListener("error", () => reject(existingRequest.error ?? new Error("Could not compare the recovery save.")), { once: true });
+        transaction.addEventListener("complete", () => resolve(), { once: true });
+        transaction.addEventListener("abort", () => {
+          if (!rejected) reject(transaction.error ?? new Error("Backup restoration was aborted."));
+        }, { once: true });
+        transaction.addEventListener("error", () => reject(transaction.error ?? new Error("Backup restoration failed.")), { once: true });
+      });
       return { revision: envelope.state.revision, stateDigest: envelope.stateDigest };
     } finally {
       database.close();
     }
   }
 
-  async quarantine(saveId: string, payload: string, reason: string): Promise<void> {
+  async quarantine(saveId: string, expected: SaveRecordExpectation, reason: string): Promise<void> {
     const database = await openDatabase();
     try {
       const transaction = database.transaction([SAVE_STORE, QUARANTINE_STORE], "readwrite");
-      transaction.objectStore(QUARANTINE_STORE).put({
-        id: `quarantine-${saveId}-${Date.now()}`,
-        saveId,
-        payload,
-        reason,
-        failedAt: Date.now(),
+      const saveStore = transaction.objectStore(SAVE_STORE);
+      const existingRequest = saveStore.get(saveId) as IDBRequest<StoredSave | undefined>;
+      await new Promise<void>((resolve, reject) => {
+        let rejected = false;
+        existingRequest.addEventListener("success", () => {
+          const existing = existingRequest.result;
+          if (!sameRecordExpectation(existing, expected)) {
+            rejected = true;
+            transaction.abort();
+            reject(new SaveConflictError(saveId, existing));
+            return;
+          }
+          transaction.objectStore(QUARANTINE_STORE).put({
+            id: `quarantine-${saveId}-${Date.now()}`,
+            saveId,
+            payload: expected.payload,
+            reason,
+            failedAt: Date.now(),
+          });
+          saveStore.delete(saveId);
+        }, { once: true });
+        existingRequest.addEventListener("error", () => reject(existingRequest.error ?? new Error("Could not compare the save being quarantined.")), { once: true });
+        transaction.addEventListener("complete", () => resolve(), { once: true });
+        transaction.addEventListener("abort", () => {
+          if (!rejected) reject(transaction.error ?? new Error("Save quarantine was aborted."));
+        }, { once: true });
+        transaction.addEventListener("error", () => reject(transaction.error ?? new Error("Save quarantine failed.")), { once: true });
       });
-      transaction.objectStore(SAVE_STORE).delete(saveId);
-      await transactionDone(transaction);
     } finally {
       database.close();
     }
