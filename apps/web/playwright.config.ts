@@ -10,9 +10,9 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   webServer: {
-    command: "pnpm dev --hostname 127.0.0.1 --port 3107",
+    command: "pnpm --dir ../.. build && pnpm start:test",
     url: "http://127.0.0.1:3107",
-    reuseExistingServer: true,
+    reuseExistingServer: false,
     timeout: 120_000,
   },
   projects: [

@@ -17,7 +17,7 @@ const designContract = `<!--
 THESIS: Coal Table and Service Theatre are two scales of one live promise; refuse the restaurant dashboard.
 OWN-WORLD: Coal, bone china, oxblood, oak, brass cues, wax-pencil paths, and authored pixel geometry.
 COMPOSITION: One four-guest room and one irregular fire share a persistent promise rail; mobile splits Room Fire Rest Pass.
-INTERACTION: Presentation switches advance zero ticks; every domain action is fixture-only until the reducer lands.
+INTERACTION: View switches advance zero ticks; service controls submit canonical actions to one device-local reducer session.
 AVOID: Fahrenheit, wallet or chain UI, generic timers, card grids, drag-only controls, and exploratory mock deviations.
 SEED: tender-baron-coal-theatre-v1
 -->`;

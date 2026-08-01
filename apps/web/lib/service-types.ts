@@ -1,50 +1,54 @@
+import type { CutStatus, HeatBand, SideStatus } from "@tender-baron/game-domain";
+
 export type ViewId = "room" | "fire" | "rest" | "pass";
 
-export type HeatZone = {
-  id: "sear" | "cook" | "hold";
-  label: string;
-  description: string;
-  coalUnits: number;
-  pattern: "dense" | "open" | "sparse";
+export type HeatPlacement = {
+  readonly id: string;
+  readonly label: string;
+  readonly description: string;
+  readonly coalUnits: number;
+  readonly intensity: number;
+  readonly band: HeatBand;
+  readonly neighbors: readonly string[];
 };
 
-export type Cover = {
-  id: "A" | "B" | "C" | "D";
-  label: string;
-  cut: string;
-  target: string;
-  targetShape: "diamond" | "square";
-  side: string;
-  status: "on-grill" | "resting" | "tempering" | "side-needed";
-  zone: HeatZone["id"] | "case" | "rest";
-  path: readonly string[];
+export type CoverView = {
+  readonly id: "A" | "B" | "C" | "D";
+  readonly coverId: string;
+  readonly label: string;
+  readonly cutId: string;
+  readonly cut: string;
+  readonly target: string;
+  readonly targetShape: "diamond" | "square";
+  readonly sideId: string;
+  readonly side: string;
+  readonly cutStatus: CutStatus;
+  readonly sideStatus: SideStatus;
+  readonly statusLabel: string;
+  readonly cellId?: string;
+  readonly path: readonly string[];
 };
 
-export type FirstServiceFixture = {
-  fixtureVersion: string;
-  serviceId: string;
-  serviceTitle: string;
-  occasion: string;
-  promise: string;
-  canonicalTick: number;
-  serviceStatus: "OPEN";
-  rulesRef: string;
-  contentRef: string;
-  zones: readonly HeatZone[];
-  covers: readonly Cover[];
-  sidesReady: number;
-  syncWindowTicks: number;
-  attention: {
-    label: string;
-    detail: string;
-    status: "requested";
+export type ServiceViewModel = {
+  readonly serviceTitle: string;
+  readonly occasion: string;
+  readonly promise: string;
+  readonly covers: readonly CoverView[];
+  readonly placements: readonly HeatPlacement[];
+  readonly sidesReady: number;
+  readonly syncWindowTicks: number;
+  readonly attention: {
+    readonly label: string;
+    readonly detail: string;
+    readonly status: string;
   };
-  restSlots: readonly {
-    id: string;
-    label: string;
-    coverId?: Cover["id"];
-    mode: "OPEN_REST" | "AVAILABLE";
-    detail: string;
+  readonly restSlots: readonly {
+    readonly id: string;
+    readonly label: string;
+    readonly coverId?: CoverView["id"];
+    readonly mode: string;
+    readonly detail: string;
   }[];
-  ledgerPreview: readonly { label: string; cents: number }[];
+  readonly ledgerPreview: readonly { readonly label: string; readonly cents: number }[];
+  readonly cutsOnGrill: number;
 };
