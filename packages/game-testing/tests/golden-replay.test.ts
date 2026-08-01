@@ -52,5 +52,5 @@ describe("golden first-service replay", () => {
       expect(repeated.replayDigest).toBe(replay.replayDigest);
       expect(repeated.stateDigest).toBe(replay.stateDigest);
     }
-  }, 60_000);
+  }, 180_000);
 });

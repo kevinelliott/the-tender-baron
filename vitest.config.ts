@@ -19,6 +19,7 @@ export default defineConfig({
     pool: "forks",
     coverage: {
       provider: "v8",
+      reportsDirectory: ".vitest-game-domain-coverage",
       include: [
         "packages/game-domain/src/**/*.ts",
         "packages/game-content/src/**/*.ts"

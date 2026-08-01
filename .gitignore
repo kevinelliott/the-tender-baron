@@ -2,6 +2,7 @@
 .next/
 node_modules/
 coverage/
+.vitest-game-domain-coverage/
 dist/
 *.tsbuildinfo
 playwright-report/
