@@ -382,6 +382,43 @@ export function useServiceSession() {
         }
       } catch (error) {
         if (cancelled) return;
+        if (error instanceof SaveConflictError) {
+          let winner: string | undefined;
+          try {
+            winner = await storageRef.current.read(SERVICE_SAVE_ID);
+          } catch (readError) {
+            memoryOnlyRef.current = true;
+            persistedRef.current = null;
+            setStorageState("MEMORY_ONLY");
+            setNotice(`Device storage became unavailable while another tab created the first service. This tab can still play in memory. ${errorMessage(readError)}`);
+            return;
+          }
+          if (winner !== undefined) {
+            try {
+              const envelope = importSave(winner, SERVICE_SAVE_ID, RULES_V1, FIRST_SERVICE_CONTENT);
+              loadEnvelope(envelope, "SAVED", "Another tab created the first verified service; this tab loaded that same canonical history.");
+              await refreshSaves();
+              return;
+            } catch (winnerError) {
+              const initial = freshInitialState();
+              initialStateRef.current = initial;
+              eventsRef.current = [];
+              persistedRef.current = null;
+              updateState(initial);
+              setStorageState("ERROR");
+              setRecovery({
+                title: "The concurrent service could not be verified",
+                detail: "Another tab created a device save, but its bytes did not verify. No history or settlement was inferred.",
+                canContinue: false,
+              });
+              setNotice(`Concurrent first-save verification failed. ${errorMessage(winnerError)}`);
+              return;
+            }
+          }
+          setStorageState("ERROR");
+          setNotice("Another tab won first-save creation, but no current history could be read. Reload before beginning service.");
+          return;
+        }
         memoryOnlyRef.current = true;
         persistedRef.current = null;
         setStorageState("MEMORY_ONLY");

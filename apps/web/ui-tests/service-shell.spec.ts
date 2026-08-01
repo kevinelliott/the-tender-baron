@@ -147,6 +147,29 @@ test("two tabs cannot overwrite one another and the losing tab gets an explicit 
   await expect(page.getByTestId("service-status")).toHaveText("BRIEFING");
 });
 
+test("simultaneous first tabs share the winning verified save instead of claiming memory-only", async ({ page, context }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "desktop first-save concurrency journey");
+  await page.goto("/replay-proof");
+  await page.evaluate(async (databaseName) => {
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.deleteDatabase(databaseName);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => reject(new Error("The test database could not be cleared."));
+    });
+  }, DATABASE);
+
+  const peers = await Promise.all(Array.from({ length: 4 }, () => context.newPage()));
+  const tabs = [page, ...peers];
+  await Promise.all(tabs.map((tab) => tab.goto("/")));
+  await Promise.all(tabs.map(async (tab) => {
+    await expect(tab.getByTestId("storage-state")).toHaveText("SAVED");
+    await expect(tab.locator(".save-book strong")).toHaveText(CURRENT_SAVE);
+    await expect(tab.getByTestId("service-status")).toHaveText("DORMANT");
+  }));
+  await Promise.all(peers.map((tab) => tab.close()));
+});
+
 test("storage-unavailable mode really plays in memory and truthfully resets on reload", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "desktop unavailable-storage journey");
   await page.addInitScript(() => {
