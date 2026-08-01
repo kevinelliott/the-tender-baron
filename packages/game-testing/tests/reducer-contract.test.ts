@@ -125,7 +125,8 @@ describe("single-action reducer contract", () => {
         sourceCellId: "coal_a",
         targetCellId: "coal_b",
         amount: 1,
-        previewRevision: revision
+        previewRevision: revision,
+        previewId: preview.previewId
       },
       "stale-apply"
     );
@@ -145,12 +146,170 @@ describe("single-action reducer contract", () => {
         sourceCellId: "coal_a",
         targetCellId: "coal_b",
         amount: 1,
-        previewRevision: preview.previewRevision
+        previewRevision: preview.previewRevision,
+        previewId: preview.previewId
       },
       "apply-rake"
     );
     expect(service.state.coalField).toEqual(preview.coalField);
     expect(service.state.coalField.reduce((sum, cell) => sum + cell.value, 0)).toBe(6);
+  });
+
+  it("binds a preview to its exact source, target, and amount", () => {
+    const service = new ServiceHarness();
+    service.act("OPEN_HOUSE", {}, "open");
+    service.act("INSPECT_PARTY", {}, "inspect");
+    const preview = service.previewRake("coal_a", "coal_b", 1);
+    expect(preview).toMatchObject({
+      previewRevision: service.state.revision,
+      sourceCellId: "coal_a",
+      targetCellId: "coal_b",
+      amount: 1
+    });
+    expect(preview.previewId).toMatch(/^[0-9a-f]{64}$/);
+
+    for (const [actionId, payload] of [
+      [
+        "changed-path",
+        {
+          sourceCellId: "coal_f",
+          targetCellId: "coal_c",
+          amount: 1,
+          previewRevision: preview.previewRevision,
+          previewId: preview.previewId
+        }
+      ],
+      [
+        "changed-amount",
+        {
+          sourceCellId: "coal_a",
+          targetCellId: "coal_b",
+          amount: 2,
+          previewRevision: preview.previewRevision,
+          previewId: preview.previewId
+        }
+      ]
+    ] as const) {
+      const action = makeAction(service.state, "APPLY_RAKE", payload, actionId);
+      const rejected = reduce(service.state, action, service.rules, service.content);
+      expect(rejected.ok).toBe(false);
+      if (!rejected.ok) {
+        expect(rejected.error.code).toBe("TB_PREVIEW_STALE");
+        expect(rejected.state).toBe(service.state);
+      }
+    }
+
+    const typed = makeAction(
+      service.state,
+      "APPLY_RAKE",
+      {
+        sourceCellId: preview.sourceCellId,
+        targetCellId: preview.targetCellId,
+        amount: preview.amount,
+        previewRevision: preview.previewRevision,
+        previewId: preview.previewId
+      },
+      "missing-identity"
+    );
+    const missingIdentity = {
+      ...typed,
+      payload: {
+        sourceCellId: typed.payload.sourceCellId,
+        targetCellId: typed.payload.targetCellId,
+        amount: typed.payload.amount,
+        previewRevision: typed.payload.previewRevision
+      }
+    } as unknown as GameAction;
+    const missingResult = reduce(
+      service.state,
+      missingIdentity,
+      service.rules,
+      service.content
+    );
+    expect(missingResult.ok).toBe(false);
+    if (!missingResult.ok) expect(missingResult.error.code).toBe("TB_PREVIEW_STALE");
+  });
+
+  it("rejects a delayed preview after canonical time advances", () => {
+    const service = new ServiceHarness();
+    service.act("OPEN_HOUSE", {}, "open");
+    service.act("INSPECT_PARTY", {}, "inspect");
+    service.act("SELECT_CUT", { cutId: "cut_strip_a" }, "select-for-delay");
+    service.act(
+      "PLACE_CUT",
+      { cutId: "cut_strip_a", cellId: "coal_a" },
+      "place-for-delay"
+    );
+    const preview = service.previewRake("coal_a", "coal_b", 1);
+    service.tick(100);
+
+    const delayed = makeAction(
+      service.state,
+      "APPLY_RAKE",
+      {
+        sourceCellId: preview.sourceCellId,
+        targetCellId: preview.targetCellId,
+        amount: preview.amount,
+        previewRevision: preview.previewRevision,
+        previewId: preview.previewId
+      },
+      "delayed-rake"
+    );
+    const rejected = reduce(service.state, delayed, service.rules, service.content);
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe("TB_PREVIEW_STALE");
+  });
+
+  it("keeps an exact preview valid across reload but rejects changed intent", () => {
+    const service = new ServiceHarness();
+    service.act("OPEN_HOUSE", {}, "open");
+    service.act("INSPECT_PARTY", {}, "inspect");
+    const preview = service.previewRake("coal_a", "coal_b", 1);
+    const replay = replayActions(
+      service.initialState,
+      service.actions,
+      service.rules,
+      service.content
+    );
+    const resumed = resumeSave(
+      createSaveEnvelope("rake-reload", replay),
+      service.rules,
+      service.content
+    );
+
+    const changed = makeAction(
+      resumed.state,
+      "APPLY_RAKE",
+      {
+        sourceCellId: "coal_f",
+        targetCellId: "coal_c",
+        amount: 1,
+        previewRevision: preview.previewRevision,
+        previewId: preview.previewId
+      },
+      "changed-after-reload"
+    );
+    const rejected = reduce(resumed.state, changed, service.rules, service.content);
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe("TB_PREVIEW_STALE");
+
+    const exact = makeAction(
+      resumed.state,
+      "APPLY_RAKE",
+      {
+        sourceCellId: preview.sourceCellId,
+        targetCellId: preview.targetCellId,
+        amount: preview.amount,
+        previewRevision: preview.previewRevision,
+        previewId: preview.previewId
+      },
+      "exact-after-reload"
+    );
+    const accepted = reduce(resumed.state, exact, service.rules, service.content);
+    expect(accepted.ok && !("preview" in accepted)).toBe(true);
+    if (accepted.ok && !("preview" in accepted)) {
+      expect(accepted.state.coalField).toEqual(preview.coalField);
+    }
   });
 
   it("serializes pause/resume and rejects batched or paused ticks", () => {

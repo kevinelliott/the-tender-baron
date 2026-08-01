@@ -26,6 +26,7 @@ import {
   evaluateCutQuality,
   heatBandForIntensity,
   previewRake,
+  rakePreviewId,
   sameVersionRef,
   sideDefinition
 } from "./simulation.js";
@@ -287,6 +288,7 @@ function applyRake(
     readonly targetCellId: string;
     readonly amount: number;
     readonly previewRevision: number;
+    readonly previewId: string;
   },
   content: FirstServiceContent,
   rules: GameRules
@@ -297,6 +299,19 @@ function applyRake(
       "TB_PREVIEW_STALE",
       "The coal field changed after that preview.",
       "Preview the rake again against the current field."
+    );
+  }
+  const expectedPreviewId = rakePreviewId(
+    state,
+    payload.sourceCellId,
+    payload.targetCellId,
+    payload.amount
+  );
+  if (payload.previewId === undefined || payload.previewId !== expectedPreviewId) {
+    fault(
+      "TB_PREVIEW_STALE",
+      "The submitted rake differs from the inspected coal preview.",
+      "Preview the exact source, target, and amount again before applying it."
     );
   }
   const preview = previewRake(
@@ -1255,7 +1270,7 @@ function applyAction(
       fault(
         "TB_ACTION_NOT_ALLOWED",
         "PREVIEW_RAKE is a non-canonical query and must use the preview result path.",
-        "Preview first, then submit APPLY_RAKE with the preview revision."
+        "Preview first, then submit APPLY_RAKE with the exact bound preview identity."
       );
   }
 }

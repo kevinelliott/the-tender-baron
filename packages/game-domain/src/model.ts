@@ -306,6 +306,7 @@ export interface ActionPayloadMap {
     readonly targetCellId: string;
     readonly amount: number;
     readonly previewRevision: number;
+    readonly previewId: string;
   };
   readonly PLACE_CUT: { readonly cutId: string; readonly cellId: string };
   readonly MOVE_CUT: { readonly cutId: string; readonly cellId: string };
@@ -355,6 +356,10 @@ export type GameAction<T extends ActionType = ActionType> = T extends ActionType
 
 export interface RakePreview {
   readonly previewRevision: number;
+  readonly previewId: string;
+  readonly sourceCellId: string;
+  readonly targetCellId: string;
+  readonly amount: number;
   readonly coalField: readonly KeyValueNumber[];
   readonly intensities: readonly KeyValueNumber[];
 }
