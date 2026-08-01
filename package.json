@@ -8,12 +8,18 @@
     "node": ">=22 <27"
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "pnpm build:domain && pnpm build:web",
+    "build:domain": "tsc -b",
+    "build:web": "pnpm --filter @tender-baron/web build",
     "clean": "tsc -b --clean",
-    "test": "vitest run --reporter=verbose",
+    "dev": "pnpm --filter @tender-baron/web dev",
+    "lint": "pnpm --filter @tender-baron/web lint",
+    "test": "pnpm test:domain && pnpm test:web",
     "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc -b --pretty false",
-    "verify": "pnpm typecheck && pnpm test && pnpm test:coverage"
+    "test:domain": "vitest run --reporter=verbose",
+    "test:web": "pnpm --filter @tender-baron/web test",
+    "typecheck": "tsc -b --pretty false && pnpm --filter @tender-baron/web typecheck",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:coverage && pnpm build"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "4.1.10",
