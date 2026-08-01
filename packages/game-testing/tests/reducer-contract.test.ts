@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   canonicalize,
+  createSaveEnvelope,
   createInitialState,
   makeAction,
-  reduce
+  reduce,
+  replayActions,
+  resumeSave
 } from "@tender-baron/game-domain";
 import type { GameAction } from "@tender-baron/game-domain";
 import { FIRST_SERVICE_CONTENT, RULES_V1 } from "@tender-baron/game-content";
@@ -34,6 +37,46 @@ describe("single-action reducer contract", () => {
       expect(rejected.error.code).toBe("TB_ACTION_ID_CONFLICT");
       expect(rejected.state).toBe(accepted.state);
     }
+  });
+
+  it("keeps delayed, reloaded, and long-tail retries idempotent", () => {
+    const service = new ServiceHarness();
+    service.act("OPEN_HOUSE", {}, "open");
+    service.act("INSPECT_PARTY", {}, "inspect");
+    service.act("SELECT_CUT", { cutId: "cut_strip_a" }, "select");
+    service.act("PLACE_CUT", { cutId: "cut_strip_a", cellId: "coal_a" }, "place");
+    const original = service.actions.at(-1)!;
+    const originalEvent = service.events.at(-1)!;
+    service.tick(100);
+
+    const delayed = reduce(service.state, original, service.rules, service.content);
+    expect(delayed.ok && !("preview" in delayed) && delayed.duplicate).toBe(true);
+    if (!delayed.ok || "preview" in delayed) return;
+    expect(delayed.event).toEqual(originalEvent);
+    expect(delayed.state).toBe(service.state);
+
+    const replay = replayActions(
+      service.initialState,
+      service.actions,
+      service.rules,
+      service.content
+    );
+    const resumed = resumeSave(
+      createSaveEnvelope("reload", replay),
+      service.rules,
+      service.content
+    );
+    const afterReload = reduce(resumed.state, original, service.rules, service.content);
+    expect(afterReload.ok && !("preview" in afterReload) && afterReload.duplicate).toBe(true);
+
+    const conflict: GameAction = {
+      ...original,
+      type: "INSPECT_PARTY",
+      payload: {}
+    };
+    const rejected = reduce(resumed.state, conflict, service.rules, service.content);
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe("TB_ACTION_ID_CONFLICT");
   });
 
   it("rejects stale revisions and skipped sequences without consuming either", () => {

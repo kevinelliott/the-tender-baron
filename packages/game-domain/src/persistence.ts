@@ -41,8 +41,35 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function utf8ByteLength(value: string): number {
+  let byteLength = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit <= 0x7f) {
+      byteLength += 1;
+    } else if (codeUnit <= 0x7ff) {
+      byteLength += 2;
+    } else if (
+      codeUnit >= 0xd800 &&
+      codeUnit <= 0xdbff &&
+      index + 1 < value.length &&
+      value.charCodeAt(index + 1) >= 0xdc00 &&
+      value.charCodeAt(index + 1) <= 0xdfff
+    ) {
+      byteLength += 4;
+      index += 1;
+    } else {
+      byteLength += 3;
+    }
+  }
+  return byteLength;
+}
+
 function parseSave(serialized: string): SaveEnvelope {
-  if (serialized.length > MAX_IMPORT_BYTES) {
+  if (
+    serialized.length > MAX_IMPORT_BYTES ||
+    utf8ByteLength(serialized) > MAX_IMPORT_BYTES
+  ) {
     fault(
       "TB_IMPORT_REJECTED",
       "The imported save exceeds the supported size bound.",

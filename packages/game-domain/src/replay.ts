@@ -10,7 +10,12 @@ import type {
   SettlementIntegrity
 } from "./model.js";
 import { reduce } from "./reducer.js";
-import { sameVersionRef, stateDigestInput } from "./simulation.js";
+import {
+  assertCanonicalInitialState,
+  assertPackBodyHashes,
+  sameVersionRef,
+  stateDigestInput
+} from "./simulation.js";
 
 function replayDigest(
   rules: GameRules,
@@ -67,6 +72,7 @@ function assertReplayRefs(
   rules: GameRules,
   content: FirstServiceContent
 ): void {
+  assertPackBodyHashes(rules, content);
   if (!sameVersionRef(initialState.rulesRef, rules.ref)) {
     fault(
       "TB_RULES_MISMATCH",
@@ -81,6 +87,7 @@ function assertReplayRefs(
       "Load the exact pinned content pack."
     );
   }
+  assertCanonicalInitialState(initialState, rules, content);
 }
 
 export function replayActions(

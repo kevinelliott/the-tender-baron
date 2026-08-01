@@ -27,7 +27,7 @@ describe("golden first-service replay", () => {
       operatingResultCents: 10_790
     });
     expect(replay.replayDigest).toBe(
-      "9907bc6d15d3fcb0e12265f654373de97b4bf3ba50a3de737661575628c1fd4d"
+      "cab1803abb7a67fca5c7a01963f512423412f4a554dd71a6dff12404c8889a6f"
     );
     expect(replay.stateDigest).toHaveLength(64);
     expect(replay.state.settlement?.integrity).toEqual({

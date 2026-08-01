@@ -1,4 +1,4 @@
-import { canonicalHash } from "./canonical.js";
+import { canonicalHash, canonicalize } from "./canonical.js";
 import { fault } from "./errors.js";
 import {
   checkedAdd,
@@ -34,12 +34,53 @@ export function sameVersionRef(
   );
 }
 
+export function assertPackBodyHashes(
+  rules: GameRules,
+  content: FirstServiceContent
+): void {
+  const { ref: _rulesRef, ...rulesBody } = rules;
+  const { ref: _contentRef, ...contentBody } = content;
+  if (canonicalHash(rulesBody) !== rules.ref.contentHash) {
+    fault(
+      "TB_RULES_MISMATCH",
+      "The supplied rules body does not match its pinned content hash.",
+      "Load the unmodified rules pack named by the pinned reference."
+    );
+  }
+  if (canonicalHash(contentBody) !== content.ref.contentHash) {
+    fault(
+      "TB_CONTENT_MISMATCH",
+      "The supplied content body does not match its pinned content hash.",
+      "Load the unmodified content pack named by the pinned reference."
+    );
+  }
+}
+
+function assertLocalServiceIdentity(serviceId: unknown, serviceSeed: unknown): asserts serviceId is string {
+  if (
+    typeof serviceId !== "string" ||
+    serviceId.length < 1 ||
+    serviceId.length > 256 ||
+    typeof serviceSeed !== "string" ||
+    serviceSeed.length < 1 ||
+    serviceSeed.length > 256
+  ) {
+    fault(
+      "TB_SAVE_CORRUPT",
+      "The replay root has an invalid local service identity or seed.",
+      "Use bounded non-empty local identity fields."
+    );
+  }
+}
+
 export function createInitialState(
   serviceId: string,
   serviceSeed: string,
   rules: GameRules,
   content: FirstServiceContent
 ): ServiceState {
+  assertPackBodyHashes(rules, content);
+  assertLocalServiceIdentity(serviceId, serviceSeed);
   if (rules.schemaVersion !== 1 || content.schemaVersion !== 1) {
     fault(
       "TB_SCHEMA_UNSUPPORTED",
@@ -118,6 +159,27 @@ export function createInitialState(
     },
     hostAssistRemaining: 1
   };
+}
+
+export function assertCanonicalInitialState(
+  candidate: ServiceState,
+  rules: GameRules,
+  content: FirstServiceContent
+): void {
+  assertLocalServiceIdentity(candidate.serviceId, candidate.serviceSeed);
+  const reconstructed = createInitialState(
+    candidate.serviceId,
+    candidate.serviceSeed,
+    rules,
+    content
+  );
+  if (canonicalize(candidate) !== canonicalize(reconstructed)) {
+    fault(
+      "TB_SAVE_CORRUPT",
+      "The replay root is not the canonical initial state for its pinned service.",
+      "Quarantine the authored root and reconstruct it from the trusted service seed."
+    );
+  }
 }
 
 export function coalValue(field: readonly KeyValueNumber[], cellId: string): number {
@@ -273,7 +335,10 @@ export function advanceCutOneTick(
   rules: GameRules,
   currentTick: number
 ): CutState {
-  if (cut.status === "ON_GRILL") {
+  if (
+    cut.status === "ON_GRILL" ||
+    (cut.status === "AT_RISK" && cut.riskLocation === "GRILL")
+  ) {
     const band = heatBandForIntensity(intensity, rules);
     const surfaceMilli = checkedAdd(
       cut.surfaceMilli,
@@ -301,7 +366,7 @@ export function advanceCutOneTick(
         cut.moistureMilli,
         definition.thermal.moistureLossByBand[band],
         `${cut.id} moisture`,
-        0,
+        -rules.numericLimit,
         100_000
       ),
       0,
@@ -313,16 +378,25 @@ export function advanceCutOneTick(
       surfaceMilli > definition.target.surface.maximum + rules.riskToleranceMilli;
     return {
       ...cut,
-      status: runningHot ? "AT_RISK" : cut.status,
+      status: runningHot || cut.status === "AT_RISK" ? "AT_RISK" : cut.status,
       surfaceMilli,
       coreMilli,
       charMilli,
       moistureMilli,
-      ...(runningHot ? { riskReason: "RUNNING_HOT" as const } : {})
+      ...(runningHot || cut.status === "AT_RISK"
+        ? {
+            riskReason: cut.riskReason ?? ("RUNNING_HOT" as const),
+            riskLocation: "GRILL" as const
+          }
+        : {})
     };
   }
 
-  if (cut.status === "RESTING" || cut.status === "READY_TO_CARVE") {
+  if (
+    cut.status === "RESTING" ||
+    cut.status === "READY_TO_CARVE" ||
+    (cut.status === "AT_RISK" && cut.riskLocation === "REST")
+  ) {
     const mode = cut.restMode ?? "OPEN_REST";
     const carryover =
       mode === "OPEN_REST"
@@ -340,7 +414,13 @@ export function advanceCutOneTick(
       rules.numericLimit
     );
     const moistureMilli = clampInteger(
-      checkedSubtract(cut.moistureMilli, moistureLoss, `${cut.id} rest moisture`, 0, 100_000),
+      checkedSubtract(
+        cut.moistureMilli,
+        moistureLoss,
+        `${cut.id} rest moisture`,
+        -rules.numericLimit,
+        100_000
+      ),
       0,
       100_000
     );
@@ -349,14 +429,19 @@ export function advanceCutOneTick(
     return {
       ...cut,
       status:
-        runningLate
+        runningLate || cut.status === "AT_RISK"
           ? "AT_RISK"
           : restElapsed >= definition.minimumRestTicks
             ? "READY_TO_CARVE"
             : "RESTING",
       coreMilli,
       moistureMilli,
-      ...(runningLate ? { riskReason: "REST_WINDOW" as const } : {})
+      ...(runningLate || cut.status === "AT_RISK"
+        ? {
+            riskReason: cut.riskReason ?? ("REST_WINDOW" as const),
+            riskLocation: "REST" as const
+          }
+        : {})
     };
   }
 

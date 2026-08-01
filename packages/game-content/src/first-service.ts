@@ -209,7 +209,8 @@ const CONTENT_BODY = {
     id: "table_soft_reopening",
     coverIds: ["cover_a", "cover_b", "cover_c", "cover_d"],
     synchronizationWindowTicks: 30,
-    attentionTick: 16
+    attentionTick: 16,
+    attentionMaximumDeferralTicks: 20
   }
 } as const;
 

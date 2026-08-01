@@ -10,11 +10,6 @@ import type {
   GameRules,
   HeatBand
 } from "@tender-baron/game-domain";
-import {
-  HASHABLE_FIRST_SERVICE_CONTENT,
-  HASHABLE_RULES_V1
-} from "./first-service.js";
-
 export interface ValidationIssue {
   readonly path: string;
   readonly message: string;
@@ -37,10 +32,12 @@ export function validateFirstServicePack(
     return issues;
   }
 
-  if (rules.ref.contentHash !== canonicalHash(HASHABLE_RULES_V1)) {
+  const { ref: _rulesRef, ...rulesBody } = rules;
+  const { ref: _contentRef, ...contentBody } = content;
+  if (rules.ref.contentHash !== canonicalHash(rulesBody)) {
     issues.push({ path: "rules.ref.contentHash", message: "Rules hash does not match its body." });
   }
-  if (content.ref.contentHash !== canonicalHash(HASHABLE_FIRST_SERVICE_CONTENT)) {
+  if (content.ref.contentHash !== canonicalHash(contentBody)) {
     issues.push({ path: "content.ref.contentHash", message: "Content hash does not match its body." });
   }
   if (rules.tickDurationMs !== 250) {
@@ -48,6 +45,17 @@ export function validateFirstServicePack(
   }
   if (rules.ledger.tipsEnabled !== false) {
     issues.push({ path: "rules.ledger.tipsEnabled", message: "Tips are absent from rules version 1." });
+  }
+  for (const [path, value] of [
+    ["content.table.synchronizationWindowTicks", content.table.synchronizationWindowTicks],
+    ["content.table.attentionTick", content.table.attentionTick],
+    ["content.table.attentionMaximumDeferralTicks", content.table.attentionMaximumDeferralTicks]
+  ] as const) {
+    try {
+      requireInteger(value, path, 1, rules.numericLimit);
+    } catch (error) {
+      issues.push({ path, message: error instanceof Error ? error.message : "Invalid integer" });
+    }
   }
 
   const cellIds = content.coalCells.map((cell) => cell.id);
