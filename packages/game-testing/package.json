@@ -1,0 +1,14 @@
+{
+  "name": "@tender-baron/game-testing",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@tender-baron/game-content": "workspace:*",
+    "@tender-baron/game-domain": "workspace:*"
+  },
+  "devDependencies": {
+    "fast-check": "4.9.0",
+    "vitest": "4.1.10"
+  }
+}
