@@ -1,0 +1,10 @@
+{
+  "approved": false,
+  "use_case": "ui-mockup",
+  "name": "Coal Table",
+  "prompt": "Exploratory high-fidelity 3:2 desktop game-interface comp for The Tender Baron. Make a dominant tactile pixel-art coal bed occupy roughly half the viewport with labeled abstract sear, cook, and hold zones and two deterministic cut paths. Place a slim reservation ledger at left, one active four-guest table glimpse at right, and a brass rest/carving rail between fire and room. Use the committed burgundy, coal, oak, bone, brass, bottle-green, and restrained electric-blue service-theatre world. Show semantic controls and state; exclude real-world cooking temperatures, wallet, token, marketplace, score, leaderboard, generic patience bars, rounded SaaS cards, gradients, glass, and photorealism. Exact text: THE TENDER BARON; A gentle hand on a serious fire.",
+  "known_deviations": [
+    "The generated exploration shows three tables instead of the canonical one four-guest first-service table.",
+    "The generated exploration shows real Fahrenheit labels; implementation must use abstract game heat labels only."
+  ]
+}
