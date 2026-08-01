@@ -137,7 +137,8 @@ function occupiedGrillCells(state: ServiceState, excludingCutId?: string): reado
     .filter(
       (cut) =>
         cut.id !== excludingCutId &&
-        (cut.status === "ON_GRILL" || cut.status === "AT_RISK") &&
+        (cut.status === "ON_GRILL" ||
+          (cut.status === "AT_RISK" && cut.riskLocation === "GRILL")) &&
         cut.cellId !== undefined
     )
     .map((cut) => cut.cellId as string);
@@ -166,7 +167,9 @@ function assertGrillPlacement(
   }
   const activeCount = state.cuts.filter(
     (cut) =>
-      cut.id !== cutId && (cut.status === "ON_GRILL" || cut.status === "AT_RISK")
+      cut.id !== cutId &&
+      (cut.status === "ON_GRILL" ||
+        (cut.status === "AT_RISK" && cut.riskLocation === "GRILL"))
   ).length;
   if (activeCount >= state.capacities.grill) {
     fault(
@@ -179,18 +182,22 @@ function assertGrillPlacement(
 
 function refreshTableReadiness(state: ServiceState): ServiceState {
   const platedCuts = state.cuts.filter((cut) => cut.status === "PLATED");
-  if (platedCuts.length === 0) {
-    return state;
-  }
+  const eligibleTicks = platedCuts.flatMap((cut) => {
+    const side = state.sides.find(
+      (candidate) => candidate.coverId === cut.coverId && candidate.status === "PLATED"
+    );
+    if (side === undefined) return [];
+    return [Math.max(cut.platedAtTick ?? state.currentTick, side.platedAtTick ?? state.currentTick)];
+  });
   const firstEligibleTick =
     state.table.firstEligibleTick ??
-    Math.min(...platedCuts.map((cut) => cut.platedAtTick ?? state.currentTick));
+    (eligibleTicks.length > 0 ? Math.min(...eligibleTicks) : undefined);
   return {
     ...state,
     table: {
       ...state.table,
       status: platedCuts.length === state.cuts.length ? "READY_TO_DELIVER" : "IN_SERVICE",
-      firstEligibleTick
+      ...(firstEligibleTick === undefined ? {} : { firstEligibleTick })
     }
   };
 }
@@ -259,7 +266,8 @@ function selectCut(
     "carvedAtTick",
     "platedAtTick",
     "quality",
-    "riskReason"
+    "riskReason",
+    "riskLocation"
   ) as CutState;
   const next = replaceCut(state, cleanCut);
   return {
@@ -436,7 +444,10 @@ function moveToRest(state: ServiceState, cutId: string): Transition {
     );
   }
   const restingCount = state.cuts.filter(
-    (candidate) => candidate.status === "RESTING" || candidate.status === "READY_TO_CARVE"
+    (candidate) =>
+      candidate.status === "RESTING" ||
+      candidate.status === "READY_TO_CARVE" ||
+      (candidate.status === "AT_RISK" && candidate.riskLocation === "REST")
   ).length;
   if (restingCount >= state.capacities.rest) {
     fault(
@@ -454,7 +465,8 @@ function moveToRest(state: ServiceState, cutId: string): Transition {
       restStartedTick: state.currentTick
     },
     "cellId",
-    "riskReason"
+    "riskReason",
+    "riskLocation"
   ) as CutState;
   return {
     state: replaceCut(state, withoutCell),
@@ -535,11 +547,11 @@ function advanceSide(
     );
   }
   return {
-    state: replaceSide(state, {
+    state: refreshTableReadiness(replaceSide(state, {
       ...side,
       status: "PLATED",
       platedAtTick: state.currentTick
-    }),
+    })),
     changes: [`side:${sideId}:PLATED`],
     ledgerDelta: ZERO_LEDGER_DELTA
   };
@@ -606,13 +618,15 @@ function chooseCutRecovery(
         "Rake a holding/cooking zone or free a placement first."
       );
     }
+    assertGrillPlacement(state, cutId, destination.id, content);
     const closed = closeOpenHeatSegment(cut, state.currentTick);
     cut = startHeatSegment(
       withoutOptional(
         { ...closed, status: "ON_GRILL" as const, recovered: true },
         "restMode",
         "restStartedTick",
-        "riskReason"
+        "riskReason",
+        "riskLocation"
       ) as CutState,
       destination.id,
       state.currentTick
@@ -625,16 +639,39 @@ function chooseCutRecovery(
   }
 
   if (choiceId === "CLOCHE_HOLD") {
+    const occupiesRest =
+      cut.status === "RESTING" ||
+      cut.status === "READY_TO_CARVE" ||
+      (cut.status === "AT_RISK" && cut.riskLocation === "REST");
+    const restingCount = state.cuts.filter(
+      (candidate) =>
+        candidate.id !== cutId &&
+        (candidate.status === "RESTING" ||
+          candidate.status === "READY_TO_CARVE" ||
+          (candidate.status === "AT_RISK" && candidate.riskLocation === "REST"))
+    ).length;
+    if (!occupiesRest && restingCount >= state.capacities.rest) {
+      fault(
+        "TB_CAPACITY_EXCEEDED",
+        "Both rest slots are occupied.",
+        "Free a rest slot before moving this cut under a cloche."
+      );
+    }
+    const restingCut =
+      cut.status === "AT_RISK" && cut.riskLocation === "GRILL"
+        ? closeOpenHeatSegment(cut, state.currentTick)
+        : cut;
     cut = withoutOptional(
       {
-        ...cut,
+        ...restingCut,
         status: "RESTING" as const,
         restMode: "CLOCHE_HOLD" as const,
         restStartedTick: cut.restStartedTick ?? state.currentTick,
         recovered: true
       },
       "cellId",
-      "riskReason"
+      "riskReason",
+      "riskLocation"
     ) as CutState;
     return {
       state: replaceCut(state, cut),
@@ -655,7 +692,8 @@ function chooseCutRecovery(
       },
       "cellId",
       "restMode",
-      "riskReason"
+      "riskReason",
+      "riskLocation"
     ) as CutState;
     return {
       state: refreshTableReadiness(replaceCut(state, plated)),
@@ -679,7 +717,8 @@ function chooseCutRecovery(
       "cellId",
       "restMode",
       "restStartedTick",
-      "riskReason"
+      "riskReason",
+      "riskLocation"
     ) as CutState;
     const next = replaceCut(state, staffMeal);
     return {
@@ -751,6 +790,20 @@ function chooseSideRecovery(
     };
   }
   if (choiceId === "DELAY_TABLE") {
+    if (side.status !== "HELD") {
+      fault(
+        "TB_ACTION_NOT_ALLOWED",
+        `${sideId} is not late enough to require a table delay.`,
+        "Use transparent delay only for a held side."
+      );
+    }
+    if (state.table.recoveryChoice !== undefined) {
+      fault(
+        "TB_ACTION_NOT_ALLOWED",
+        "A whole-table recovery has already been chosen.",
+        "Continue with the recorded recovery without charging it again."
+      );
+    }
     const delta: LedgerAccrual = {
       ...ZERO_LEDGER_DELTA,
       recoveryCourtesyCostCents: rules.ledger.honestServiceCourtesyCostCents
@@ -779,6 +832,7 @@ function chooseSideRecovery(
 function chooseTableRecovery(
   state: ServiceState,
   choiceId: string,
+  content: FirstServiceContent,
   rules: GameRules
 ): Transition {
   if (choiceId !== "SHARED_COURSE" && choiceId !== "SERVE_HONESTLY") {
@@ -786,6 +840,28 @@ function chooseTableRecovery(
       "TB_ACTION_NOT_ALLOWED",
       `${choiceId} is not a valid table recovery.`,
       "Choose a shared course or honest service."
+    );
+  }
+  if (state.table.recoveryChoice !== undefined) {
+    fault(
+      "TB_ACTION_NOT_ALLOWED",
+      "A whole-table recovery has already been chosen.",
+      "Continue with the recorded recovery without charging it again."
+    );
+  }
+  const allCutsPlated = state.cuts.every((cut) => cut.status === "PLATED");
+  const missingSideCount = state.sides.filter((side) => side.status !== "PLATED").length;
+  const hasMissingComponent = allCutsPlated && missingSideCount === 1;
+  const hasMissedSynchronization =
+    allCutsPlated &&
+    missingSideCount === 0 &&
+    state.table.firstEligibleTick !== undefined &&
+    state.currentTick - state.table.firstEligibleTick > content.table.synchronizationWindowTicks;
+  if (!hasMissingComponent && !hasMissedSynchronization) {
+    fault(
+      "TB_ACTION_NOT_ALLOWED",
+      "The table has no active authored recovery condition.",
+      "Wait for a missing component or synchronization miss before choosing a recovery."
     );
   }
   const recoveryChoice = choiceId as "SHARED_COURSE" | "SERVE_HONESTLY";
@@ -852,7 +928,14 @@ function chooseRecovery(
     case "SIDE":
       return chooseSideRecovery(state, payload.targetId, payload.choiceId, content, rules);
     case "TABLE":
-      return chooseTableRecovery(state, payload.choiceId, rules);
+      if (payload.targetId !== state.table.id) {
+        fault(
+          "TB_CONTENT_MISMATCH",
+          `Table ${payload.targetId} is not part of this service.`,
+          "Choose the pinned soft-reopening table."
+        );
+      }
+      return chooseTableRecovery(state, payload.choiceId, content, rules);
     case "ATTENTION":
       return chooseAttentionRecovery(state, payload.choiceId, rules);
   }
@@ -882,7 +965,8 @@ function carveCut(
       quality: evaluateCutQuality(cut, definition)
     },
     "restMode",
-    "riskReason"
+    "riskReason",
+    "riskLocation"
   ) as CutState;
   return {
     state: refreshTableReadiness(replaceCut(state, plated)),
@@ -925,14 +1009,20 @@ function advanceTick(
   const sides = state.sides.map((side) =>
     advanceSideOneTick(side, sideDefinition(content, side.id), currentTick)
   );
-  const attention =
-    state.attention.status === "QUIET" && currentTick >= content.table.attentionTick
-      ? { status: "REQUESTED" as const, requestedAtTick: currentTick }
-      : state.attention;
+  let attention = state.attention;
+  if (state.attention.status === "QUIET" && currentTick >= content.table.attentionTick) {
+    attention = { status: "REQUESTED" as const, requestedAtTick: currentTick };
+  } else if (
+    (state.attention.status === "REQUESTED" || state.attention.status === "DEFERRED") &&
+    state.attention.requestedAtTick !== undefined &&
+    currentTick - state.attention.requestedAtTick >= content.table.attentionMaximumDeferralTicks
+  ) {
+    attention = { ...state.attention, status: "MISSED" as const };
+  }
 
   const changes = ["tick:+1"];
   if (attention !== state.attention) {
-    changes.push("attention:REQUESTED");
+    changes.push(`attention:${attention.status}`);
   }
   cuts.forEach((cut, index) => {
     const previous = state.cuts[index];
@@ -1200,6 +1290,10 @@ function validateEnvelope(
   requireInteger(action.actionSequence, "action sequence", 0, rules.numericLimit);
   requireInteger(action.expectedRevision, "expected revision", 0, rules.numericLimit);
   requireInteger(action.issuedAtTick, "issued-at tick", 0, rules.numericLimit);
+  return canonicalHash(action);
+}
+
+function validateCurrentTick(state: ServiceState, action: GameAction): void {
   if (action.issuedAtTick !== state.currentTick) {
     fault(
       "TB_ACTION_SEQUENCE",
@@ -1207,7 +1301,6 @@ function validateEnvelope(
       "Recreate the action from the current service state."
     );
   }
-  return canonicalHash(action);
 }
 
 function canonicalEvent(
@@ -1241,6 +1334,27 @@ export function reduce(
   try {
     const actionHash = validateEnvelope(previousState, action, rules, content);
 
+    const duplicate = previousState.acceptedActionIds.find(
+      (record) => record.actionId === action.actionId
+    );
+    if (duplicate !== undefined) {
+      if (duplicate.actionHash !== actionHash) {
+        fault(
+          "TB_ACTION_ID_CONFLICT",
+          "An accepted action ID was reused with different canonical bytes.",
+          "Generate a new action ID from the current state."
+        );
+      }
+      return {
+        ok: true,
+        state: previousState,
+        event: duplicate.event,
+        duplicate: true
+      };
+    }
+
+    validateCurrentTick(previousState, action);
+
     if (action.type === "PREVIEW_RAKE") {
       if (action.expectedRevision !== previousState.revision) {
         fault(
@@ -1261,25 +1375,6 @@ export function reduce(
           rules
         ),
         duplicate: false
-      };
-    }
-
-    const duplicate = previousState.acceptedActionIds.find(
-      (record) => record.actionId === action.actionId
-    );
-    if (duplicate !== undefined) {
-      if (duplicate.actionHash !== actionHash) {
-        fault(
-          "TB_ACTION_ID_CONFLICT",
-          "An accepted action ID was reused with different canonical bytes.",
-          "Generate a new action ID from the current state."
-        );
-      }
-      return {
-        ok: true,
-        state: previousState,
-        event: duplicate.event,
-        duplicate: true
       };
     }
 

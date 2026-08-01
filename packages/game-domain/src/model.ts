@@ -122,6 +122,7 @@ export interface FirstServiceContent {
     readonly coverIds: readonly string[];
     readonly synchronizationWindowTicks: number;
     readonly attentionTick: number;
+    readonly attentionMaximumDeferralTicks: number;
   };
 }
 
@@ -182,6 +183,7 @@ export interface CutState {
   readonly platedAtTick?: number;
   readonly quality?: CutQuality;
   readonly riskReason?: "RUNNING_HOT" | "REST_WINDOW";
+  readonly riskLocation?: "GRILL" | "REST";
   readonly heatPath: readonly HeatPathSegment[];
   readonly selectedCostRecognized: boolean;
   readonly recovered: boolean;

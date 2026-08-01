@@ -3,6 +3,7 @@ import {
   canonicalHash,
   canonicalize,
   checkedAdd,
+  createInitialState,
   sha256Hex
 } from "@tender-baron/game-domain";
 import type { FirstServiceContent, GameRules } from "@tender-baron/game-domain";
@@ -63,5 +64,31 @@ describe("canonical bytes and content validation", () => {
     };
     floating.cuts[0]!.minimumRestTicks = 1.5;
     expect(validateFirstServicePack(RULES_V1, floating)[0]?.message).toMatch(/safe integer/);
+  });
+
+  it("binds the supplied rules and content bodies to their unchanged refs", () => {
+    const rules = clone(RULES_V1) as GameRules & {
+      ledger: { fuelCostCents: number };
+    };
+    rules.ledger.fuelCostCents += 1;
+    expect(validateFirstServicePack(rules, FIRST_SERVICE_CONTENT)).toContainEqual({
+      path: "rules.ref.contentHash",
+      message: "Rules hash does not match its body."
+    });
+    expect(() =>
+      createInitialState("tampered-rules", "seed", rules, FIRST_SERVICE_CONTENT)
+    ).toThrow(/rules body/);
+
+    const content = clone(FIRST_SERVICE_CONTENT) as FirstServiceContent & {
+      cuts: Array<{ menuRevenueCents: number }>;
+    };
+    content.cuts[0]!.menuRevenueCents += 1;
+    expect(validateFirstServicePack(RULES_V1, content)).toContainEqual({
+      path: "content.ref.contentHash",
+      message: "Content hash does not match its body."
+    });
+    expect(() =>
+      createInitialState("tampered-content", "seed", RULES_V1, content)
+    ).toThrow(/content body/);
   });
 });
