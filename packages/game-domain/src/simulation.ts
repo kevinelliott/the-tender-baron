@@ -232,6 +232,24 @@ export function heatBandForIntensity(intensity: number, rules: GameRules): HeatB
   return "HOLD";
 }
 
+export function rakePreviewId(
+  state: ServiceState,
+  sourceCellId: string,
+  targetCellId: string,
+  amount: number
+): string {
+  return canonicalHash({
+    domain: "tender-baron/rake-preview/v1",
+    serviceId: state.serviceId,
+    rulesRef: state.rulesRef,
+    contentRef: state.contentRef,
+    previewRevision: state.revision,
+    sourceCellId,
+    targetCellId,
+    amount
+  });
+}
+
 export function previewRake(
   state: ServiceState,
   sourceCellId: string,
@@ -274,6 +292,10 @@ export function previewRake(
 
   return {
     previewRevision: state.revision,
+    previewId: rakePreviewId(state, sourceCellId, targetCellId, amount),
+    sourceCellId,
+    targetCellId,
+    amount,
     coalField: field,
     intensities: coalIntensities(field, content, rules)
   };
