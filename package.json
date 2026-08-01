@@ -1,0 +1,37 @@
+{
+  "name": "the-tender-baron",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.13.1",
+  "engines": {
+    "node": ">=22 <27"
+  },
+  "scripts": {
+    "build": "pnpm build:domain && pnpm build:web",
+    "build:domain": "tsc -b",
+    "build:web": "pnpm --filter @tender-baron/web build",
+    "clean": "tsc -b --clean",
+    "dev": "pnpm --filter @tender-baron/web dev",
+    "lint": "pnpm --filter @tender-baron/web lint",
+    "test": "pnpm test:domain && pnpm test:web",
+    "test:coverage": "vitest run --coverage",
+    "test:domain": "vitest run --reporter=verbose",
+    "test:web": "pnpm --filter @tender-baron/web test",
+    "typecheck": "tsc -b --pretty false && pnpm --filter @tender-baron/web typecheck",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:coverage && pnpm build"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "4.1.10",
+    "fake-indexeddb": "6.2.5",
+    "fast-check": "4.9.0",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  },
+  "pnpm": {
+    "overrides": {
+      "postcss": "8.5.25",
+      "sharp": "0.35.3"
+    }
+  }
+}
