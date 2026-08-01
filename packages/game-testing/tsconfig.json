@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
+    "types": ["vitest/globals"]
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "references": [
+    { "path": "../game-domain" },
+    { "path": "../game-content" }
+  ]
+}

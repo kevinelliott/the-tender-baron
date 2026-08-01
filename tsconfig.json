@@ -1,0 +1,8 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/game-domain" },
+    { "path": "packages/game-content" },
+    { "path": "packages/game-testing" }
+  ]
+}
