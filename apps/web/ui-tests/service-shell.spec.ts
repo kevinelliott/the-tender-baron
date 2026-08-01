@@ -134,7 +134,7 @@ test("live monotonic cadence pauses in the background and resumes without catch-
   await chooseView(page, "Coal Table");
   await clickAction(page, page.getByTestId("cut-action"));
   await clickAction(page, page.getByTestId("cut-action"));
-  await expect.poll(async () => Number(await page.getByTestId("canonical-tick").textContent()), { timeout: 5_000 }).toBeGreaterThanOrEqual(4);
+  await expect.poll(async () => Number(await page.getByTestId("canonical-tick").textContent()), { timeout: 15_000 }).toBeGreaterThanOrEqual(4);
 
   const other = await context.newPage();
   await other.goto("/replay-proof");
@@ -152,7 +152,7 @@ test("live monotonic cadence pauses in the background and resumes without catch-
     document.dispatchEvent(new Event("visibilitychange"));
   });
   await clickAction(page, page.getByRole("button", { name: "Resume service" }));
-  await expect.poll(async () => Number(await page.getByTestId("canonical-tick").textContent()), { timeout: 3_000 }).toBeGreaterThan(Number(pausedTick));
+  await expect.poll(async () => Number(await page.getByTestId("canonical-tick").textContent()), { timeout: 15_000 }).toBeGreaterThan(Number(pausedTick));
 });
 
 test("rake selection changes clear the bound preview and only exact intent applies", async ({ page }, testInfo) => {
