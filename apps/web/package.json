@@ -16,7 +16,7 @@
   "dependencies": {
     "@tender-baron/game-content": "workspace:*",
     "@tender-baron/game-domain": "workspace:*",
-    "next": "16.2.12",
+    "next": "16.4.1",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
